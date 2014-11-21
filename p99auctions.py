@@ -40,7 +40,7 @@ class Log:
 		if int(log_db_count[0]) < 1:
 			log_db.cur.execute("INSERT INTO logs VALUES ('" + self.name + "','" + log_hash + "')")
 		else:
-			log_db.cur.execute("UPDATE logs SET name = '" + self.name + "', hash = '" + log_hash + "'")
+			log_db.cur.execute("UPDATE logs SET hash = '" + log_hash + "' WHERE name = '" + self.name + "'")
 		log_db.conn.commit()
 		log_db.conn.close()
 
