@@ -6,6 +6,7 @@ import os
 import sys
 from multiprocessing import Pool
 import time
+import winsound
 
 # Append a Log object to logs for every .txt file in the EQ logs path
 def read_logs(path):
@@ -18,14 +19,17 @@ def read_logs(path):
 	return logs
 
 # Process auction line and insert to database
-def process_auction(auction_line):
+def process_auction(auction_line,alerts_enabled=False,beeps=False):
 	auctions_db = Database('auctions.db')
-	auction = Auction(auction_line) 
+	auction = Auction(auction_line)
 	auctions_db.insert(auction)
-	alerts = auction.Alerts(auctions_db)
-	if alerts:
-		for alert in alerts:
-			print alert
+	if alerts_enabled:
+		alerts = auction.Alerts(auctions_db)
+		if alerts:
+			for alert in alerts:
+				if beeps:
+					winsound.Beep(2600,300)
+				print "(I" + alert[4] + " M" + alert[5] + ") " + alert[0] + " : " + alert[1] + " @ " + alert[2] + " : " + alert[3]
 
 # Main loop for every log file
 if __name__ == '__main__':
@@ -76,16 +80,21 @@ if __name__ == '__main__':
 	# Determine which log is actively being logged to
 	if not passiveonly:
 		print "[Identifying Active Log]"
-		print "Sleeping 10 seconds to allow logging..."
-		time.sleep(10)
-		# Build a list of logs which changed, set the active log
-		active_logs = []
-		for log in logs:
-			if log.IsUpdated():
-				print log.name + " is active."
-				active_logs.append(log)
-		active_log = active_logs[0]
+		while True:
+			try:
+				print "Sleeping 3 seconds to allow logging..."
+				time.sleep(3)
+				# Build a list of logs which changed, set the active log
+				active_logs = []
+				for log in logs:
+					if log.IsUpdated():
+						print log.name + " is active."
+						active_logs.append(log)
+				active_log = active_logs[0]
+				break
+			except:
+				print "No log found..."
 		# Watch the active log, process auctions, and stamp the current md5 in logs table
 		for line in active_log.FollowAuctions():
-			process_auction(line)
+			process_auction(line,True)
 			active_log.Logged(current=True)

@@ -126,22 +126,53 @@ class Database:
 		self.cur = self.conn.cursor()
 
 	def select_30_average(self,item):
-		self.cur.execute("select avg(price) from auctions where price != 0 and item = '" + item[0] + "' and price > (select avg(price) from auctions where price != 0 and item= '" + item[0] + "') * 0.30 and price < (select avg(price) from auctions where price != 0 and item = '" + item[0] + "') * 1.70;")
-		return self.cur.fetchone()[0]
+		self.cur.execute("select avg(price) from (select distinct price, auctioneer from auctions where item = '" + item[0] + "' and price != 0 and price > (select avg(price) from auctions where price != 0 and item= '" + item[0] + "') * 0.30 and price < (select avg(price) from auctions where price != 0 and item = '" + item[0] + "') * 1.70);")
+		average = self.cur.fetchone()[0]
+		if average == None:
+			return None
+		else:
+			return round(float(average))
 
 	def insert(self,auction):
 		for item in auction.items:
 			self.cur.execute("SELECT count(*) FROM auctions WHERE auctioneer = '" + auction.auctioneer + "' AND time = '" + auction.time + "' AND item = '" + item[0] + "'")
 			auc_count = self.cur.fetchone()
 			if int(auc_count[0]) < 1:
-				try:
-					self.cur.execute("INSERT INTO auctions VALUES (?,?,?,?,?)", (auction.time, auction.auctioneer, item[2], item[0], item[1]))
-					self.conn.commit()
-				except sqlite3.OperationalError:
-					print sys.exc_info()
-					print("DATABASE LOCKED; sleeping for 3 seconds and trying again")
-					time.sleep(3)
-					Retry
+				while True:
+					try:
+						self.cur.execute("INSERT INTO auctions VALUES (?,?,?,?,?)", (auction.time, auction.auctioneer, item[2], item[0], item[1]))
+						self.conn.commit()
+					except sqlite3.OperationalError:
+						print sys.exc_info()
+						print("Database locked? Sleeping for 3 seconds before trying again.")
+						time.sleep(3)
+					break
+
+	def get_higher_recent_prices(self,item,auctioneer):
+		self.cur.execute("select auctioneer,time,price from auctions where price > '" + item[1] + "' and item = '" + item[0] + "' and auctioneer = '" + auctioneer + "' and time > datetime('now', '-3hour', 'localtime');")
+		return self.cur.fetchone()
+
+	def get_buy_pressure(self,item):
+		self.cur.execute("select count(*) as buy_count from (select distinct auctioneer,item, count(*) from auctions where type = 'wtb' and item ='" + item[0] + "' and time > datetime('now', '-30 day', 'localtime') group by item, auctioneer) group by item order by buy_count desc;")
+		try:
+			buy_pressure = self.cur.fetchone()[0]
+		except TypeError:
+			buy_pressure = None
+		if buy_pressure == None:
+			return None
+		else:
+			return round(buy_pressure)
+
+	def get_avg_buy_pressure(self):
+		self.cur.execute("select avg(buy_count) from (select count(*) as buy_count from (select distinct item, auctioneer, count(*) from auctions where type = 'wtb' group by item, auctioneer) group by item) where buy_count > 1;")
+		try:
+			avg_buy_pressure = self.cur.fetchone()[0]
+		except TypeError:
+			avg_buy_pressure = None
+		if avg_buy_pressure == None:
+			return None
+		else:
+			return round(avg_buy_pressure)
 
 # Auction class, one auction message
 class Auction:
@@ -185,7 +216,8 @@ class Auction:
 	def Alerts(self,auctions_db):
 		alerts = []
 		for item in self.items:
-			if int(item[1]) > 0:
+			average_30_day_price = auctions_db.select_30_average(item)
+			if average_30_day_price != None and int(item[1]) > 0 and item[2] == 'wts' and int(item[1]) > int(average_30_day_price) * 0.30  and int(item[1]) < int(average_30_day_price) * 1.70:
 				# Below 30 day average price
 				#average_30_day_price = auctions_db.select_30_average(item)
 				#if average_30_day_price != None:
@@ -193,11 +225,21 @@ class Auction:
 				#		alerts.append((self.auctioneer,item[0],item[1],'Below 30 day average price: ' + str(average_30_day_price)))
 
 				# Far below 30 day average price
-				average_30_day_price = auctions_db.select_30_average(item)
-				if average_30_day_price != None:
-					lowered_average = int(average_30_day_price) * 0.85
-					if int(item[1]) < int(lowered_average):
-						alerts.append((self.auctioneer,item[0],item[1],'Far below 30 day average price: ' + str(average_30_day_price)))
+				lowered_average = int(average_30_day_price) * 0.90
+				#print "Comparing: Avg " + lowered_average + " : Item " +item[1]
+				if int(item[1]) < int(lowered_average):
+					alerts.append((self.auctioneer,item[0],item[1],'below 30 day avg: ' + str(average_30_day_price), str(auctions_db.get_buy_pressure(item)), str(auctions_db.get_avg_buy_pressure())))
+
+				# Money to be made
+				profit_potential = int(average_30_day_price) - int(item[1])
+				if (profit_potential > 1000):
+					alerts.append((self.auctioneer,item[0],item[1],'profit potential: ' + str(profit_potential), str(auctions_db.get_buy_pressure(item)), str(auctions_db.get_avg_buy_pressure())))
+
+			# Auctioneer has lowered item price recently?
+			if int(item[1]) > 0 and item[2] == 'wts':
+				higher_prices = auctions_db.get_higher_recent_prices(item, self.auctioneer)
+				if higher_prices != None:
+					alerts.append((self.auctioneer,item[0],item[1],'price descending: ' + str(higher_prices[2]), str(auctions_db.get_buy_pressure(item)), str(auctions_db.get_avg_buy_pressure())))
 
 			if len(alerts) < 1:
 				return False
@@ -206,8 +248,18 @@ class Auction:
 
 	def GetItems(self,auction_type,text):
 		text = text.lower()
+		for number in range(0,300):
+			text = text.replace(' x' + str(number),' ')
 		for number in range(0,100):
-			text = text.replace('.' + str(number) + 'k',str(number) + '00 ')
+			if len(str(number)) > 1:
+				text = text.replace(',' + str(number) + 'k',str(number) + '0 ')
+			else:
+				text = text.replace(',' + str(number) + 'k',str(number) + '00 ')
+		for number in range(0,100):
+			if len(str(number)) > 1:
+				text = text.replace('.' + str(number) + 'k',str(number) + '0 ')
+			else:
+				text = text.replace('.' + str(number) + 'k',str(number) + '00 ')
 		for number in range(0,10):
 			text = text.replace(str(number) + 'k',str(number) + '000 ')
 		text = text.replace('.','')
