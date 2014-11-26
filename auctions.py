@@ -3,6 +3,7 @@ from p99auctions import Config
 from p99auctions import Database
 from p99auctions import Auction
 import os
+import sys
 from multiprocessing import Pool
 import time
 
@@ -21,9 +22,25 @@ def process_auction(auction_line):
 	auctions_db = Database('auctions.db')
 	auction = Auction(auction_line) 
 	auctions_db.insert(auction)
+	alerts = auction.Alerts(auctions_db)
+	if alerts:
+		for alert in alerts:
+			print alert
 
 # Main loop for every log file
 if __name__ == '__main__':
+
+	# Functionality to specify active or passive logging only
+	activeonly = False
+	passiveonly = False
+	for arg in sys.argv:
+		if arg == "--active-only":
+			activeonly = True
+		if arg == "--passive-only":
+			passiveonly = True
+	if activeonly and passiveonly:
+		print "You can not specify active only and passive only options together."
+		exit()
 
 	# Get config variables
 	print "\n[P99Auctions]\n"
@@ -39,35 +56,36 @@ if __name__ == '__main__':
 	logs = read_logs(p99auctions_cfg.logs)
 
 	# For every log
-	for log in logs:
-		# If log md5 matches database logs table md5 for this filename, skip
-		if log.IsLogged():
-			print "[Analyzed Log] - " + log.name
-			continue
-		# Processing log since md5 doesn't match logs table
-		print "[Analyzing Log] - " + log.name
-		print "Found " + str(log.NumberOfAuctions()) + " auction lines."
-		print "[Parsing & Inserting Auctions]"
-		total_auctions += log.NumberOfAuctions()
-		print "Total auctions: " + str(total_auctions)
-		# Multiprocessing of log auction lines
-		p.map(process_auction, log.AuctionLines())
-		# Stamp log md5 into logs table in database, use original md5 not current md5
-		log.Logged(current=False)
+	if not activeonly:
+		for log in logs:
+			# If log md5 matches database logs table md5 for this filename, skip
+			if log.IsLogged():
+				print "[Analyzed Log] - " + log.name
+				continue
+			# Processing log since md5 doesn't match logs table
+			print "[Analyzing Log] - " + log.name
+			print "Found " + str(log.NumberOfAuctions()) + " auction lines."
+			print "[Parsing & Inserting Auctions]"
+			total_auctions += log.NumberOfAuctions()
+			print "Total auctions: " + str(total_auctions)
+			# Multiprocessing of log auction lines
+			p.map(process_auction, log.AuctionLines())
+			# Stamp log md5 into logs table in database, use original md5 not current md5
+			log.Logged(current=False)
 
 	# Determine which log is actively being logged to
-	print "[Identifying Active Log]"
-	print "Sleeping 10 seconds to allow logging..."
-	time.sleep(10)
-	# Build a list of logs which changed, set the active log
-	active_logs = []
-	for log in logs:
-		if log.IsUpdated():
-			print log.name + " is active."
-			active_logs.append(log)
-	active_log = active_logs[0]
-	# Watch the active log, process auctions, and stamp the current md5 in logs table
-	for line in active_log.FollowAuctions():
-		print line
-		process_auction(line)
-		active_log.Logged(current=True)
+	if not passiveonly:
+		print "[Identifying Active Log]"
+		print "Sleeping 10 seconds to allow logging..."
+		time.sleep(10)
+		# Build a list of logs which changed, set the active log
+		active_logs = []
+		for log in logs:
+			if log.IsUpdated():
+				print log.name + " is active."
+				active_logs.append(log)
+		active_log = active_logs[0]
+		# Watch the active log, process auctions, and stamp the current md5 in logs table
+		for line in active_log.FollowAuctions():
+			process_auction(line)
+			active_log.Logged(current=True)

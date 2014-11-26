@@ -125,6 +125,10 @@ class Database:
 		self.conn = sqlite3.connect(db)
 		self.cur = self.conn.cursor()
 
+	def select_30_average(self,item):
+		self.cur.execute("select avg(price) from auctions where price != 0 and item = '" + item[0] + "' and price > (select avg(price) from auctions where price != 0 and item= '" + item[0] + "') * 0.30 and price < (select avg(price) from auctions where price != 0 and item = '" + item[0] + "') * 1.70;")
+		return self.cur.fetchone()[0]
+
 	def insert(self,auction):
 		for item in auction.items:
 			self.cur.execute("SELECT count(*) FROM auctions WHERE auctioneer = '" + auction.auctioneer + "' AND time = '" + auction.time + "' AND item = '" + item[0] + "'")
@@ -144,6 +148,7 @@ class Auction:
 	def __init__(self,auction):
 		self.time = auction.split(']')[0][1:]
 		self.time = datetime.strptime(self.time, '%a %b %d %H:%M:%S %Y').strftime('%Y-%m-%d %H:%M:%S')
+		auction = auction.replace(",in an unknown tongue,", ",")
 		self.text = auction.split(' auctions, ')[1]
 		self.auctioneer = auction.split(' auctions, ')[0].split(']')[1][1:]
 		self.wts = self.WTSBool(self.text)
@@ -158,9 +163,6 @@ class Auction:
 		else:
 			self.wtb_items = []
 		self.items = self.wtb_items + self.wts_items
-		print self.time + " " + self.auctioneer + ":"
-		for item in self.items:
-			print item[2] + " " + item[0] + " " + item[1]
 
 	def WTSBool(self,text):
 		if "wts" in text.lower():
@@ -180,9 +182,31 @@ class Auction:
 			auction_insert.append((self.time,self.auctioneer,item[2],item[0],item[1]))
 		return auction_insert
 
+	def Alerts(self,auctions_db):
+		alerts = []
+		for item in self.items:
+			if int(item[1]) > 0:
+				# Below 30 day average price
+				#average_30_day_price = auctions_db.select_30_average(item)
+				#if average_30_day_price != None:
+				#	if int(item[1]) < int(average_30_day_price):
+				#		alerts.append((self.auctioneer,item[0],item[1],'Below 30 day average price: ' + str(average_30_day_price)))
+
+				# Far below 30 day average price
+				average_30_day_price = auctions_db.select_30_average(item)
+				if average_30_day_price != None:
+					lowered_average = int(average_30_day_price) * 0.85
+					if int(item[1]) < int(lowered_average):
+						alerts.append((self.auctioneer,item[0],item[1],'Far below 30 day average price: ' + str(average_30_day_price)))
+
+			if len(alerts) < 1:
+				return False
+			else:
+				return alerts
+
 	def GetItems(self,auction_type,text):
 		text = text.lower()
-		for number in range(0,10):
+		for number in range(0,100):
 			text = text.replace('.' + str(number) + 'k',str(number) + '00 ')
 		for number in range(0,10):
 			text = text.replace(str(number) + 'k',str(number) + '000 ')
